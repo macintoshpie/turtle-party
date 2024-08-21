@@ -26,13 +26,34 @@
     <script src="/socket.io/socket.io.js"></script>
     <script>
       const MAX_COMMANDS = 500
-      const fps = 30;
+      const fps = 60;
       const fpsInterval = 1000 / fps;
       let then = null
       let startTime = null
       const users = {}
       let canvas = null
       const images = {}
+
+      const makeTracker = () => {
+        return {
+          commands: [],
+          pos: [0, 0], 
+          pushIdx: 0,
+          commandIdx: 0,
+          framesDrawnForCommand: 0,
+        }
+      }
+
+      const addCommand = (tracker, event) => {
+        tracker.commands[tracker.pushIdx] = event
+        tracker.pushIdx = ((tracker.pushIdx + 1) % MAX_COMMANDS)
+        return tracker
+      }
+
+      const moveToNextCommand = (user) => {
+        user.commandIdx = ((user.commandIdx + 1) % user.commands.length)
+        user.framesDrawnForCommand = 0
+      }
 
       const socket = io({
         // Socket.IO options
@@ -55,12 +76,11 @@
       // })
 
       socket.on("draw", (socketId, command) => {
-        if (socketId in users) {
-          users[socketId].commands[users[socketId].pushIdx] = command
-          users[socketId].pushIdx = ((users[socketId].pushIdx + 1) % MAX_COMMANDS)
-        } else {
-          users[socketId] = {commands: [command], pos: [0, 0], color: 'black', penSize: 1, drawIdx: 0, penIsDown: true, pushIdx: 1}
+        if (!(socketId in users)) {
+          users[socketId] = makeTracker()
         }
+
+        addCommand(users[socketId], command)
       })
 
       function loadImages() {
@@ -118,56 +138,61 @@
 
       function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height)
-        for (const socketId in users) {
-          // draw frame for user
-          const userPos = users[socketId].pos
-          ctx.strokeStyle = users[socketId].color
-          ctx.lineWidth = users[socketId].penSize
-          const command = users[socketId].commands[users[socketId].drawIdx]
-          if (!command) {
-            continue
-          }
-
-          if (command.type === 'goto') {
-            // {type: 'goto', position: [x, y]}
-            users[socketId].pos = command.position
-            if (users[socketId].penIsDown) {
-              ctx.beginPath()
-              ctx.moveTo(userPos[0], userPos[1])
-              ctx.lineTo(command.position[0], command.position[1])
-              ctx.stroke();
+        const TRAIL_LENGTH = 7
+        for (let commandOffset = 0; commandOffset < TRAIL_LENGTH; commandOffset++) {
+          for (const socketId in users) {
+            const user = users[socketId]
+            const currentIdx = user.commandIdx
+            let offsetIdx = currentIdx - commandOffset
+            offsetIdx = ((offsetIdx % user.commands.length) + user.commands.length) % user.commands.length;
+            const command = user.commands[offsetIdx]
+            if (!command) {
+              if (commandOffset == TRAIL_LENGTH - 1) {
+                moveToNextCommand(user)
+              }
+              return;
             }
-          } else if (command.type === 'color') {
-            users[socketId].color = command.color
-          } else if (command.type === 'reset') {
-            users[socketId].commands = []
-            users[socketId].pos = [0, 0]
-            users[socketId].penIsDown = true
-            users[socketId].penSize = 1
-          } else if (command.type === 'penup') {
-            users[socketId].penIsDown = false
-          } else if (command.type === 'pendown') {
-            users[socketId].penIsDown = true
-          } else if (command.type === 'pensize') {
-            users[socketId].penSize = Math.max(1, Math.min(10, command.width))
-          } else if (command.type === 'circle') {
-            if (users[socketId].penIsDown) {
+  
+            ctx.strokeStyle = command.color
+            ctx.lineWidth = command.penSize
+            ctx.globalAlpha = 1 / (1 + (commandOffset * 10))
+  
+            if (command.goto) {
+              if (command.penDown) {
+                ctx.beginPath()
+                ctx.moveTo(user.pos[0], user.pos[1])
+                ctx.lineTo(command.goto[0], command.goto[1])
+                ctx.stroke();
+              }
+            } else if (command.reset) {
+              users[socketId] = makeTracker()
+            } else if (command.circle) {
+              // always draw -- ignore if pen is up or down
               ctx.beginPath()
-              ctx.arc(userPos[0], userPos[1], command.radius, 0, 2 * Math.PI);
+              ctx.arc(user.pos[0], user.pos[1], command.circle.radius, 0, 2 * Math.PI);
               ctx.stroke()
+            } else if (command.shape) {
+              if (command.shape in images) {
+                ctx.drawImage(images[command.shape], user.pos[0], user.pos[1], 50, 50);
+              }
+            } else {
+              console.log('Unknown command', command)
             }
-          } else if (command.type === 'shape') {
-            if (command.shape in images) {
-              ctx.drawImage(images[command.shape], userPos[0], userPos[1], 50, 50);
+            
+            if (commandOffset == TRAIL_LENGTH - 1) {
+              // todo, translate speed to turtle speeds instead of frames drawn
+              user.framesDrawnForCommand += 1
+              if (user.framesDrawnForCommand >= command.speed) {
+                // update the user's position
+                if (command.goto) {
+                  user.pos = command.goto
+                }
+                // move to the next command
+                moveToNextCommand(user)
+              }
             }
-          } else {
-            console.log('Unknown command', command)
           }
-
-          users[socketId].drawIdx = ((users[socketId].drawIdx + 1) % users[socketId].commands.length)
         }
-
-        // window.requestAnimationFrame(draw);
       }
     </script>
   </body>

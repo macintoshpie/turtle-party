@@ -1,0 +1,291 @@
+    <style>
+      body {
+        font-family: monospace;
+        line-height: 1.3em;
+      }
+
+      button {
+        font-family: monospace;
+        margin-right: 3px;
+      }
+
+      code {
+        background-color: #e6e6e6;
+        border-radius: 3px;
+      }
+    </style>
+    <canvas style="position:fixed; top:0; left:0; z-index: -1" id="turtle-party"></canvas>
+    <div style="margin: auto; width: 560px; margin-top: 50px;">
+      <h1>replcon turtle party</h1>
+      <div style="padding-bottom: 10px">
+        <details open>
+          <summary>Instructions</summary>
+          <p>Run code in Replit and create animations together!</p>
+          <ol>
+            <li>Log in with your replit account: {{#if apiKey}} you're logged in! {{else}} <script authed="location.reload()" src="script/auth.js"></script> {{/if}}</li>
+            <li>Fork the <a href="https://replit.com/@replitted/turtle-factory?v=1" target="_blank">turtle-factory repl</a></li>
+            <li>Copy your API Key
+              {{#if apiKey}}
+              <code>{{apiKey}}</code> 
+              {{else}}
+              <code>log in</code> 
+              {{/if}}
+            </li>
+            <li>Create a secret in your repl named <code>TOKEN</code></li>
+            <li>Run the repl! Check out <a href="https://replit.com/@replitted/turtle-factory#README.md" target="_blank">the docs</a> for more information or reach out for help in the <a href="https://discord.com/channels/437048931827056642/953363087174533160">#replcon channel</a> in discord</li>
+          </ol>
+
+          <iframe width="560" height="315" src="https://www.youtube.com/embed/VxG0ZqP3MK0?autoplay=1&loop=1" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+        </details>
+      </div>
+      <button onclick="showAll()">Show everyone!</button>
+      <button onclick="hideAll()">Hide everyone!</button>
+      <ul id='users-list'>
+      </ul>
+    </div>
+    <div style="display:none;">
+      <img id="pizza"
+           src="img/pizza.png"
+           width="50" height="50">
+      <img id="bot"
+           src="img/bot.png"
+           width="50" height="50">
+      <img id="replit"
+           src="img/replit.png"
+           width="50" height="50">
+  </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const MAX_COMMANDS = 500
+      const fps = 60;
+      const fpsInterval = 1000 / fps;
+      let then = null
+      let startTime = null
+      const users = {}
+      let canvas = null
+      const images = {}
+
+      const addUserDom = (userId) => {
+        const li = document.createElement("li");
+        li.id = userId;
+        const btn = document.createElement('button')
+        btn.innerHTML = 'toggle'
+        btn.onclick = () => {
+          users[userId].hidden = !users[userId].hidden
+        }
+        li.appendChild(btn)
+        const a = document.createElement('a');
+        const linkText = document.createTextNode(users[userId].username || '???');
+        a.appendChild(linkText);
+        a.href = `http://replit.com/@${users[userId].username}`;
+        li.appendChild(a);
+        const element = document.getElementById("users-list");
+        element.appendChild(li);
+      }
+
+      const removeUserDom = (userId) => {
+        document.getElementById(userId).remove()
+      }
+
+      const showAll = () => {
+        Object.keys(users).forEach(userId => users[userId].hidden = false)
+      }
+
+      const hideAll = () => {
+        Object.keys(users).forEach(userId => users[userId].hidden = true)
+      }
+
+      const makeTracker = (username) => {
+        return {
+          username: username || '????',
+          commands: [],
+          pos: [0, 0], 
+          pushIdx: 0,
+          commandIdx: 0,
+          framesDrawnForCommand: 0,
+        }
+      }
+
+      const addUser = (info) => {
+        users[info.id] = makeTracker()
+        users[info.id].pushIdx = info.pushIdx || 0
+        users[info.id].commands = info.commands || []
+        users[info.id].username = info.username || '???'
+
+        addUserDom(info.id)
+      }
+
+      const deleteUser = (userId) => {
+        if (userId in users) {
+          delete users[userId]
+          removeUserFromDom(userId)
+        }
+      }
+
+      const addCommand = (tracker, event) => {
+        tracker.commands[tracker.pushIdx] = event
+        tracker.pushIdx = ((tracker.pushIdx + 1) % MAX_COMMANDS)
+        return tracker
+      }
+
+      const moveToNextCommand = (user) => {
+        user.commandIdx = ((user.commandIdx + 1) % user.commands.length)
+        if (Number.isNaN(user.commandIdx)) {
+          user.commandIdx = 0
+        }
+        user.framesDrawnForCommand = 0
+      }
+
+      const socket = io({
+        auth: {
+          token: '{{apiKey}}'
+        }
+      });
+
+      socket.on("connect", () => {
+        console.log('connected')
+        socket.emit("allUsers", (hydrateUsers) => {
+          console.log(hydrateUsers)
+          for (const userId of Object.keys(hydrateUsers)) {
+            addUser({...hydrateUsers[userId], id: userId})
+            // users[userId] = makeTracker()
+            // users[userId].pushIdx = hydrateUsers[userId].pushIdx
+            // users[userId].commands = hydrateUsers[userId].commands
+          }
+          console.log('hydrated', users)
+        })
+      });
+
+      socket.on("connect_error", (err) => {
+        console.log('error', err)
+      });
+
+      socket.on("disconnect", (reason) => {
+        console.log('disconnected', reason)
+      });
+
+      socket.on("removeUser", ({userId}) => {
+        // console.log('removig ', userId)
+        // console.log(users)
+        // if (userId in users) {
+        //   console.log('removing user')
+        //   delete users[userId]
+        // }
+        // console.log(users)
+        deleteUser(userId)
+      })
+
+      socket.on("draw", (userId, command) => {
+        if (!(userId in users)) {
+          addUser({...makeTracker(), id: userId})
+        }
+
+        addCommand(users[userId], command)
+      })
+
+      function loadImages() {
+        images['bot'] = document.getElementById('bot');
+        images['pizza'] = document.getElementById('pizza');
+        images['replit'] = document.getElementById('replit');
+      }
+
+      window.addEventListener('load', () => {
+        canvas = document.getElementById('turtle-party');
+        if (canvas.getContext) {
+          ctx = canvas.getContext('2d');
+        } else {
+          console.log('Canvas unsupported :(')
+          return
+        }
+
+        window.addEventListener('resize', resizeCanvas, false);
+        loadImages()
+
+        init()
+      })
+
+      function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+
+      function init() {
+        if (!ctx) {
+          return;
+        }
+        console.log('starting...')
+        resizeCanvas()
+
+        then = Date.now();
+        startTime = then;
+        window.requestAnimationFrame(drawFPS)
+      }
+
+      function drawFPS() {
+        window.requestAnimationFrame(drawFPS)
+
+        now = Date.now();
+        elapsed = now - then;
+    
+        // if enough time has elapsed, draw the next frame
+        if (elapsed > fpsInterval) {
+          then = now - (elapsed % fpsInterval);
+  
+          // Put your drawing code here
+          draw()
+        }
+      }
+
+      function draw() {
+        // let counter = 0
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        for (const socketId in users) {
+          const user = users[socketId]
+          if (user.hidden) {
+            continue
+          }
+          const command = user.commands[user.commandIdx]
+          if (!command) {
+            moveToNextCommand(user)
+            continue
+          }
+
+          ctx.strokeStyle = command.color
+          ctx.lineWidth = command.penSize
+
+          if (command.goto) {
+            if (command.penDown) {
+              ctx.beginPath()
+              ctx.moveTo(user.pos[0], user.pos[1])
+              ctx.lineTo(command.goto[0], command.goto[1])
+              ctx.stroke();
+            }
+          } else if (command.reset) {
+            users[socketId] = {...makeTracker(), username: users[socketId].username}
+          } else if (command.circle) {
+            // always draw -- ignore if pen is up or down
+            ctx.beginPath()
+            ctx.arc(user.pos[0], user.pos[1], command.circle.radius, 0, 2 * Math.PI);
+            ctx.stroke()
+          } else if (command.shape) {
+            if (command.shape in images) {
+              ctx.drawImage(images[command.shape], user.pos[0], user.pos[1], 50, 50);
+            }
+          } else {
+            console.log('Unknown command', command)
+          }
+
+          // todo, translate speed to turtle speeds instead of frames drawn
+          user.framesDrawnForCommand += 1
+          if (user.framesDrawnForCommand >= command.speed) {
+            // update the user's position
+            if (command.goto) {
+              user.pos = command.goto
+            }
+            // move to the next command
+            moveToNextCommand(user)
+          }
+        }
+      }
+    </script>
